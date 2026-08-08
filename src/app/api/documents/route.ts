@@ -1,10 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { connectToDatabase } from '@/lib/db';
-import { PricingDocument } from '@/lib/models/Document';
+import { and, desc, eq, sql } from 'drizzle-orm';
+import { getDb } from '@/lib/db';
+import { documents, lineItems } from '@/lib/schema';
 import { getUserId } from '@/lib/auth';
 import { errorResponse, parseJson } from '@/lib/http';
 import { documentCreateSchema } from '@/lib/validation';
-import { buildLineItem, recomputeTotals, serializeDocument } from '@/lib/documents';
+import { buildLineItem, recomputeTotals, serializeDocument, serializeDocumentSummary } from '@/lib/documents';
 import { CalculationError } from '@/lib/calc';
 
 const MAX_LIMIT = 100;
@@ -14,30 +15,32 @@ export async function GET(request: NextRequest) {
   const userId = await getUserId(request);
   if (!userId) return errorResponse(401, 'Not authenticated');
 
-  await connectToDatabase();
-
   const searchParams = request.nextUrl.searchParams;
-  const status = searchParams.get('status');
-  if (status && status !== 'draft' && status !== 'finalized') {
+  const rawStatus = searchParams.get('status');
+  if (rawStatus && rawStatus !== 'draft' && rawStatus !== 'finalized') {
     return errorResponse(400, 'status must be "draft" or "finalized"');
   }
+  const status = rawStatus as 'draft' | 'finalized' | null;
 
   const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
   const limit = Math.min(MAX_LIMIT, Math.max(1, Number(searchParams.get('limit') ?? String(DEFAULT_LIMIT)) || DEFAULT_LIMIT));
 
-  const filter: Record<string, unknown> = { userId };
-  if (status) filter.status = status;
+  const db = getDb();
+  const whereClause = status ? and(eq(documents.userId, userId), eq(documents.status, status)) : eq(documents.userId, userId);
 
-  const [documents, total] = await Promise.all([
-    PricingDocument.find(filter)
-      .sort({ issueDate: -1, _id: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit),
-    PricingDocument.countDocuments(filter),
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select()
+      .from(documents)
+      .where(whereClause)
+      .orderBy(desc(documents.issueDate), desc(documents.id))
+      .limit(limit)
+      .offset((page - 1) * limit),
+    db.select({ total: sql<number>`count(*)::int` }).from(documents).where(whereClause),
   ]);
 
   return NextResponse.json({
-    documents: documents.map(serializeDocument),
+    documents: rows.map(serializeDocumentSummary),
     page,
     limit,
     total,
@@ -51,28 +54,34 @@ export async function POST(request: NextRequest) {
 
   const parsed = await parseJson(request, documentCreateSchema);
   if (parsed.error) return parsed.error;
-  const { title, customer, issueDate, lineItems } = parsed.data;
+  const { title, customer, issueDate, lineItems: lineItemInputs } = parsed.data;
 
   let builtLines;
   try {
-    builtLines = lineItems.map(buildLineItem);
+    builtLines = lineItemInputs.map(buildLineItem);
   } catch (err) {
     if (err instanceof CalculationError) return errorResponse(400, err.message);
     throw err;
   }
 
-  await connectToDatabase();
+  const totals = recomputeTotals(builtLines);
+  const db = getDb();
 
-  const doc = new PricingDocument({
-    userId,
-    title,
-    customer,
-    issueDate,
-    status: 'draft',
-    lineItems: builtLines,
+  const doc = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(documents)
+      .values({ userId, title, customer, issueDate, status: 'draft', ...totals })
+      .returning();
+
+    const insertedLines = builtLines.length
+      ? await tx
+          .insert(lineItems)
+          .values(builtLines.map((line, index) => ({ ...line, documentId: created.id, position: index })))
+          .returning()
+      : [];
+
+    return { doc: created, lines: insertedLines };
   });
-  recomputeTotals(doc);
-  await doc.save();
 
-  return NextResponse.json(serializeDocument(doc), { status: 201 });
+  return NextResponse.json(serializeDocument(doc.doc, doc.lines), { status: 201 });
 }

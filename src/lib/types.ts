@@ -27,8 +27,10 @@ export interface DocumentApi {
   updatedAt: string;
 }
 
+export type DocumentSummaryApi = Omit<DocumentApi, 'lineItems'>;
+
 export interface DocumentListResponse {
-  documents: DocumentApi[];
+  documents: DocumentSummaryApi[];
   page: number;
   limit: number;
   total: number;

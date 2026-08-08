@@ -4,14 +4,14 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/apiClient';
-import type { DocumentApi, DocumentListResponse } from '@/lib/types';
+import type { DocumentApi, DocumentListResponse, DocumentSummaryApi } from '@/lib/types';
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
 export default function DocumentsPage() {
-  const [documents, setDocuments] = useState<DocumentApi[] | null>(null);
+  const [documents, setDocuments] = useState<DocumentSummaryApi[] | null>(null);
   const [statusFilter, setStatusFilter] = useState<'' | 'draft' | 'finalized'>('');
   const [error, setError] = useState<string | null>(null);
 

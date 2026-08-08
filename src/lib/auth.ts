@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server';
 
 const SESSION_COOKIE = 'session';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function getJwtSecret(): Uint8Array {
   const secret = process.env.JWT_SECRET;
@@ -32,7 +33,10 @@ export async function createSessionToken(userId: string): Promise<string> {
 export async function verifySessionToken(token: string): Promise<string | null> {
   try {
     const { payload } = await jwtVerify(token, getJwtSecret());
-    return typeof payload.sub === 'string' ? payload.sub : null;
+    // The id is a Postgres uuid column; rejecting non-UUID subs here means a
+    // tampered/garbage cookie cleanly reads as unauthenticated (401) instead
+    // of causing an "invalid input syntax for type uuid" error downstream.
+    return typeof payload.sub === 'string' && UUID_RE.test(payload.sub) ? payload.sub : null;
   } catch {
     return null;
   }

@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { connectToDatabase } from '@/lib/db';
+import { eq } from 'drizzle-orm';
+import { getDb } from '@/lib/db';
+import { documents } from '@/lib/schema';
 import { getUserId } from '@/lib/auth';
 import { errorResponse, parseJson } from '@/lib/http';
 import { documentUpdateSchema } from '@/lib/validation';
 import { serializeDocument } from '@/lib/documents';
-import { loadOwnedDocument } from '@/lib/loadOwnedDocument';
+import { getLineItems, loadOwnedDocument } from '@/lib/documentQueries';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -12,12 +14,13 @@ export async function GET(request: NextRequest, { params }: Params) {
   const userId = await getUserId(request);
   if (!userId) return errorResponse(401, 'Not authenticated');
 
-  await connectToDatabase();
+  const db = getDb();
   const { id } = await params;
-  const doc = await loadOwnedDocument(userId, id);
+  const doc = await loadOwnedDocument(db, userId, id);
   if (!doc) return errorResponse(404, 'Document not found');
 
-  return NextResponse.json(serializeDocument(doc));
+  const lines = await getLineItems(db, doc.id);
+  return NextResponse.json(serializeDocument(doc, lines));
 }
 
 export async function PATCH(request: NextRequest, { params }: Params) {
@@ -27,9 +30,9 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   const parsed = await parseJson(request, documentUpdateSchema);
   if (parsed.error) return parsed.error;
 
-  await connectToDatabase();
+  const db = getDb();
   const { id } = await params;
-  const doc = await loadOwnedDocument(userId, id);
+  const doc = await loadOwnedDocument(db, userId, id);
   if (!doc) return errorResponse(404, 'Document not found');
 
   if (doc.status === 'finalized') {
@@ -37,27 +40,35 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   }
 
   const { title, customer, issueDate } = parsed.data;
-  if (title !== undefined) doc.title = title;
-  if (customer !== undefined) doc.customer = customer;
-  if (issueDate !== undefined) doc.issueDate = issueDate;
-  await doc.save();
+  const [updated] = await db
+    .update(documents)
+    .set({
+      ...(title !== undefined ? { title } : {}),
+      ...(customer !== undefined ? { customer } : {}),
+      ...(issueDate !== undefined ? { issueDate } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(documents.id, doc.id))
+    .returning();
 
-  return NextResponse.json(serializeDocument(doc));
+  const lines = await getLineItems(db, doc.id);
+  return NextResponse.json(serializeDocument(updated, lines));
 }
 
 export async function DELETE(request: NextRequest, { params }: Params) {
   const userId = await getUserId(request);
   if (!userId) return errorResponse(401, 'Not authenticated');
 
-  await connectToDatabase();
+  const db = getDb();
   const { id } = await params;
-  const doc = await loadOwnedDocument(userId, id);
+  const doc = await loadOwnedDocument(db, userId, id);
   if (!doc) return errorResponse(404, 'Document not found');
 
   if (doc.status === 'finalized') {
     return errorResponse(409, 'Document is finalized and cannot be deleted');
   }
 
-  await doc.deleteOne();
+  // Line items cascade via the documents FK's ON DELETE CASCADE.
+  await db.delete(documents).where(eq(documents.id, doc.id));
   return NextResponse.json({ ok: true });
 }
