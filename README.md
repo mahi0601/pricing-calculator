@@ -108,6 +108,19 @@ Validation errors return `400` with a `details` array of `{ path, message }`. Ow
 - A queue-backed export/printable-view (stretch goal) instead of synchronous HTML generation.
 - Integration tests against a real Mongo instance (current tests cover the calculation module only, which is the highest-value surface, but route-level tests would catch regressions in the 409/404 authorization logic).
 
+## Repository
+
+https://github.com/mahi0601/pricing-calculator
+
 ## Deployment
 
-Deployed to Vercel with MongoDB Atlas as the database. `MONGODB_URI` and `JWT_SECRET` are set as Vercel project environment variables.
+**Live URL:** _TODO — fill in after deploying, per the steps below._
+
+Deploy target: Vercel (frontend + API routes) with MongoDB Atlas as the database.
+
+1. **Database** — create a free cluster at [mongodb.com/atlas](https://mongodb.com/atlas). Add a database user, allow network access from anywhere (0.0.0.0/0, since Vercel's serverless functions have no fixed IP), and copy the connection string.
+2. **Deploy** — go to [vercel.com/new](https://vercel.com/new), import the `mahi0601/pricing-calculator` GitHub repo, and before the first deploy set these Project Environment Variables:
+   - `MONGODB_URI` — the Atlas connection string from step 1 (include a database name in the path, e.g. `.../pricing_calculator?retryWrites=true...`)
+   - `JWT_SECRET` — a long random string (e.g. `openssl rand -base64 32`)
+3. Click Deploy. Vercel builds with `npm run build` and serves the API routes as serverless functions automatically — no extra config needed.
+4. Paste the resulting `*.vercel.app` URL into this README and into the submission email.
